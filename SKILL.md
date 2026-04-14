@@ -210,24 +210,7 @@ This is critical for resumability. If the user comes back in a new conversation,
 
 ## GENERATION
 
-Once benefits and screenshot pairings are confirmed, generate the final App Store screenshots using Nano Banana Pro (via the Gemini MCP server).
-
-### Prerequisites Check
-
-Before generating, verify the Gemini MCP server is available by checking that the `generate_image` tool exists. If it is NOT available, tell the user:
-
-```
-⚠️ Gemini MCP server not detected. To generate screenshots, you need to set it up:
-
-1. Install: npm install -g gemini-mcp
-2. Add to your Claude Code MCP config (~/.claude/settings.json or project .mcp.json)
-3. Restart Claude Code
-4. Run this skill again
-
-See: https://github.com/nicobailon/gemini-mcp for setup instructions.
-```
-
-Do NOT proceed with generation if the tool is unavailable.
+Once benefits and screenshot pairings are confirmed, generate the final App Store screenshots using a two-stage process: compose.py creates the scaffold, then you manually enhance it using the Gemini web app (gemini.google.com).
 
 ### App Store Connect Dimensions
 
@@ -241,7 +224,7 @@ App Store Connect is **very strict** about image dimensions — it will reject s
 
 Default to **1290 x 2796px** (iPhone 6.7") unless the user specifies otherwise. Ask the user which size(s) they need. Up to 10 screenshots can be uploaded per display size.
 
-**IMPORTANT — Aspect ratio mismatch**: Apple's required dimensions are narrower than standard 9:16 (~0.461 ratio vs 0.5625). Nano Banana generates at preset aspect ratios, so we generate **wider than needed** at 9:16 with 4K resolution, then **crop and resize** down to exact Apple dimensions in a post-processing step (see Step 4 below). This approach avoids stretching — we remove excess width instead.
+**IMPORTANT — Aspect ratio mismatch**: Apple's required dimensions are narrower than standard 9:16 (~0.461 ratio vs 0.5625). Gemini generates at preset aspect ratios, so we generate **wider than needed** at 9:16 with 4K resolution, then **crop and resize** down to exact Apple dimensions in a post-processing step (see Step 3 below). This approach avoids stretching — we remove excess width instead.
 
 ### Screenshot Format Specification
 
@@ -278,11 +261,11 @@ Breakout elements can give screenshots personality and make them feel dynamic. B
 
 Generation uses a two-stage approach for consistency:
 1. **Stage 1 (Scaffold)**: compose.py creates a deterministic local image with the correct text, device frame, and screenshot. This guarantees consistent layout across all screenshots.
-2. **Stage 2 (Enhance)**: The scaffold is sent to Nano Banana Pro to add breakout elements, depth, and visual polish.
+2. **Stage 2 (Enhance — Manual)**: You upload the scaffold to gemini.google.com and run enhancement prompts to add breakout elements, depth, and visual polish. The Gemini web app is used directly, so no API key is needed.
 
 **The first approved screenshot becomes the style template for the entire set.** All subsequent screenshots are enhanced using both their own scaffold (for layout) AND the first approved screenshot (for style). This ensures every screenshot in the set has the same device frame rendering, text treatment, background style, and overall visual quality — so when viewed side-by-side in the App Store, they look like a cohesive professional set.
 
-For each benefit + screenshot pair, generate **3 enhanced versions in parallel** so the user can pick the best one.
+For each benefit + screenshot pair, generate **3 enhanced versions** (manually via gemini.google.com) so the user can pick the best one.
 
 **Step 0: Save brand colour to memory**
 
@@ -317,26 +300,31 @@ This outputs pixel-perfect 1290×2796 PNGs with:
 - Simulator screenshot composited inside the frame
 - Solid background colour
 
-The scaffolds are internal intermediates — do NOT show them to the user or ask for confirmation. Proceed immediately to Step 2 (Nano Banana enhancement).
+The scaffolds are the input for the manual enhancement step. Proceed immediately to Step 2.
 
-**Step 2: Enhance with Nano Banana Pro (3 versions in parallel)**
+**Step 2: Manual Gemini Enhancement (3 versions)**
 
-Make **3 parallel `edit_image` calls**. The parallel execution is critical — always fire all 3 calls in a single message, never sequentially.
+Generation is done manually via gemini.google.com using the prompts below. No API key required — use your existing Gemini subscription.
 
-For each of the 3 calls, use:
-- `prompt`: Enhancement instructions (see prompt templates below — different for first vs subsequent screenshots)
-- `images`: See below for which images to include
-- `outputPath`: Different path for each version:
-  - `./screenshots/01-[benefit-slug]/v1.jpg`
-  - `./screenshots/01-[benefit-slug]/v2.jpg`
-  - `./screenshots/01-[benefit-slug]/v3.jpg`
+**2a. Display the scaffold**
 
-#### First screenshot (no approved template yet)
+Use the Read tool to show the scaffold to the user:
+- `screenshots/0N-[benefit-slug]/scaffold.png`
 
-Use only the scaffold as input:
-- `images`: The scaffold via `filePath` pointing to `screenshots/01-[benefit-slug]/scaffold.png`
+For **subsequent screenshots** (after the first is approved), also display the style template so the user has both images ready to upload:
+- `screenshots/final/01-[first-benefit-slug].jpg`
 
-**First screenshot prompt template:**
+**2b. Output 3 ready-to-copy prompts**
+
+Present all 3 prompts clearly labelled. Each prompt is complete and ready to paste into Gemini. To maximise variety across the 3 versions, vary the secondary elements instruction in each prompt (Version 1: no secondary elements; Version 2: subtle contextual icon or badge; Version 3: your best creative suggestion for 1 supporting element). Keep the core instructions identical across all 3.
+
+Use the appropriate prompt template below based on whether this is the first screenshot or a subsequent one.
+
+---
+
+#### First screenshot prompt template (no style template yet)
+
+Fill in the `[PLACEHOLDERS]` based on your analysis of the scaffold and app screen, then output the completed prompt 3 times (varying only the secondary elements line):
 
 ```
 This is a SCAFFOLD for an App Store screenshot — a rough layout showing the correct text, device frame position, and app screenshot placement. Your job is to transform this into a polished, professional App Store marketing screenshot that would make someone tap Download.
@@ -350,22 +338,20 @@ ENHANCE AND POLISH:
 - Replace the placeholder device frame with a photorealistic iPhone 15 Pro mockup — sleek, modern, with accurate proportions, reflections, and subtle shadows. The phone should look like a real device, not a flat rectangle. Keep the same position and size as the scaffold.
 - Refine the overall visual quality to look like a professional, high-budget App Store screenshot
 - OPTIONALLY add a PRIMARY breakout element — but ONLY if there is an obvious, visually compelling UI panel on the app screen that directly relates to the benefit headline. If nothing on screen clearly reinforces the headline, skip the breakout entirely — a clean screenshot with no breakout is better than a forced one. When you DO add a breakout, it MUST be an entire UI panel or grouped section (e.g., a complete card with its title and content, a full list section, a complete dialog/sheet) — never individual small elements like a single button, icon, or colour dot. IMPORTANT: The panel must stay at the SAME vertical position and orientation as where it appears on screen — do NOT rotate or angle it. The panel must be SCALED UP significantly — rendered much larger than it appears on the phone screen — so that it extends dramatically beyond BOTH left and right edges of the device frame, clearly overlapping the phone bezel on both sides, expanding to nearly the full width of the screenshot canvas. Do NOT keep the panel at its original on-screen size with just padding added around it. The panel itself must be enlarged. It should appear to float in front of the device at this larger scale — add a soft drop shadow beneath it to create depth and sell the hovering effect. The panel must look like it came from the app — same colours, same style, same content. Do NOT invent new elements.
-[PRIMARY BREAKOUT — if a relevant panel is obvious, describe the specific UI panel visible on screen and instruct it to extend beyond both edges of the device frame with a drop shadow, e.g., "The [panel name] card/row extends beyond both left and right edges of the device frame, overlapping the phone bezel on both sides, expanding to nearly the full screenshot width. It floats in front of the device with a soft drop shadow beneath it." If no panel clearly relates to the headline, write "No breakout — the app screen speaks for itself."]
-- Optionally add 1-2 secondary elements that reinforce the benefit and message of the screenshot — the kind of enhancements a professional graphic designer would add for impact. These are NOT from the app UI; they are creative additions that help clearly communicate what the screenshot is trying to portray to the user browsing the App Store. They should carry the message and support ASO conversion, but never at the cost of the overall design aesthetic. They must not compete with the primary breakout for attention.
-[SECONDARY ELEMENTS (optional) — describe 0-2 small supporting elements that tell the story, or "None needed"]
-- The background should be a clean, solid brand colour. Do NOT add glows, gradients, radial patterns, or light effects to the background. Keep it flat and bold.
+[PRIMARY BREAKOUT — describe the specific UI panel to break out, or "No breakout — the app screen speaks for itself."]
+- Optionally add 1-2 secondary elements that reinforce the benefit and message of the screenshot — the kind of enhancements a professional graphic designer would add for impact. These are NOT from the app UI; they are creative additions that help clearly communicate what the screenshot is trying to portray. They must not compete with the primary breakout for attention.
+[SECONDARY ELEMENTS — vary this line across the 3 versions: Version 1: "None needed", Version 2: "subtle contextual badge or icon only", Version 3: your best creative suggestion]
+- The background should be a clean, solid brand colour. Do NOT add glows, gradients, radial patterns, or light effects. Keep it flat and bold.
 - Ensure the text is crisp, bold, and highly readable
 
 The final result should look like it was designed by a professional App Store screenshot agency — polished, high-converting, and visually striking. No watermarks, no extra text, no app store UI chrome.
 ```
 
-#### Subsequent screenshots (after first is approved)
+---
 
-Use **two images** as input:
-1. The **scaffold** for this benefit (`screenshots/0N-[benefit-slug]/scaffold.png`) — defines the layout
-2. The **first approved screenshot** (`screenshots/final/01-[first-benefit-slug].jpg`) — defines the style template
+#### Subsequent screenshot prompt template (style template available)
 
-**Subsequent screenshot prompt template:**
+The user uploads TWO images to Gemini: the scaffold first, then the style template. Fill in the `[PLACEHOLDERS]` and output the prompt 3 times (varying only the secondary elements line):
 
 ```
 You are creating the next screenshot in an App Store screenshot SET. It must look like it belongs to the same series as the style reference.
@@ -380,61 +366,84 @@ REQUIREMENTS:
 - Match the style template's background — clean, solid brand colour. No glows, gradients, radial patterns, or light effects.
 - Use the scaffold's layout for positioning (text, device, screenshot placement)
 - OPTIONALLY add a PRIMARY breakout element — but ONLY if there is an obvious, visually compelling UI panel on the app screen that directly relates to the benefit headline. If nothing clearly reinforces the headline, skip the breakout entirely. When used, it MUST be an entire UI panel or grouped section (NOT individual small elements like a single button or icon). The panel must stay at the SAME vertical position and orientation as on screen — do NOT rotate or angle it. The panel must be SCALED UP significantly — rendered much larger than it appears on the phone screen — so that it extends dramatically beyond BOTH left and right edges of the device frame, clearly overlapping the phone bezel on both sides, expanding to nearly the full width of the screenshot canvas. Do NOT keep the panel at its original on-screen size. The panel itself must be enlarged. It should appear to float in front of the device at this larger scale — add a soft drop shadow beneath it to create depth. The panel MUST come from the app screenshot — same colours, same style, same content. Do NOT invent new elements.
-[PRIMARY BREAKOUT — if a relevant panel is obvious, describe the specific UI panel visible on screen to pop out with a drop shadow, extending beyond both device frame edges. Otherwise write "No breakout — the app screen speaks for itself."]
-- Optionally add 1-2 secondary elements that reinforce the benefit and message of the screenshot — the kind of enhancements a professional graphic designer would add for impact. These are NOT from the app UI; they are creative additions that help clearly communicate what the screenshot is trying to portray to the user browsing the App Store. They should carry the message and support ASO conversion, but never at the cost of the overall design aesthetic. They must not compete with the primary breakout for attention.
-[SECONDARY ELEMENTS (optional) — 0-2 small supporting elements that tell the story, or "None needed"]
+[PRIMARY BREAKOUT — describe the specific UI panel to break out, or "No breakout — the app screen speaks for itself."]
+- Optionally add 1-2 secondary elements that reinforce the benefit and message of the screenshot. They must not compete with the primary breakout for attention.
+[SECONDARY ELEMENTS — vary this line across the 3 versions: Version 1: "None needed", Version 2: "subtle contextual badge or icon only", Version 3: your best creative suggestion]
 - The breakout elements should match the style and energy level of those in the style template
 
-The result must look like it was designed alongside the style template as part of the same professional set. When placed side-by-side in the App Store, they should be visually cohesive — same quality, same aesthetic, same design language, just different content.
-
-No watermarks, no extra text, no app store UI chrome.
+The result must look like it was designed alongside the style template as part of the same professional set. No watermarks, no extra text, no app store UI chrome.
 ```
 
-**IMPORTANT — Consistency enforcement**: The scaffold guarantees consistent layout. The style template guarantees consistent visual treatment. If Nano Banana changes the text, layout, or deviates from the style template, regenerate.
+---
 
-**Step 3: IMMEDIATELY crop and resize ALL 3 versions to App Store dimensions**
+**2c. Pause with instructions**
 
-⚠️ **You MUST run this immediately after all 3 `edit_image` calls complete. Do NOT show the user any image before running this. The raw Nano Banana output is always the wrong dimensions for App Store Connect.**
+After outputting the 3 prompts, tell the user:
 
-**CRITICAL — Use exactly ONE Bash tool call for all 3 crop/resize operations.** Do NOT make 3 separate Bash calls. Do NOT use parallel Bash calls. Use the single loop below so the user only sees one permission prompt:
+```
+Manual step — open gemini.google.com:
+
+1. Upload the scaffold image shown above[, then also upload the style template image shown above — both images in the same conversation]
+2. Paste the Version 1 prompt → generate → download the result → save as:
+   screenshots/0N-[benefit-slug]/v1.jpg
+3. Start a new Gemini conversation, re-upload the image(s), paste Version 2 → save as:
+   screenshots/0N-[benefit-slug]/v2.jpg
+4. Repeat for Version 3 → save as:
+   screenshots/0N-[benefit-slug]/v3.jpg
+5. Reply here when all 3 are saved.
+```
+
+(Omit the style template upload instruction for the first screenshot.)
+
+**2d. Display all 3 versions**
+
+Once the user confirms the files are saved, use the Read tool to display all 3 images inside Claude. Label them **Version 1**, **Version 2**, and **Version 3**. Ask the user to pick their favourite or request changes.
+
+**Step 3: Crop and resize the selected version to App Store dimensions**
+
+⚠️ **Run this immediately after the user picks their favourite version. Gemini outputs at its own aspect ratio — the raw image is never the correct dimensions for App Store Connect.**
+
+Once the user selects a version (e.g. v2), run the crop/resize using a single Bash call. The script detects the OS automatically — macOS uses `sips`, Windows/Linux uses `resize.py`:
 
 ```bash
+SELECTED="screenshots/0N-[benefit-slug]/v2.jpg" && \
+OUTPUT="${SELECTED%.jpg}-resized.jpg" && \
 TARGET_W=1290 && TARGET_H=2796 && \
-for INPUT in screenshots/01-[benefit-slug]/v1.jpg screenshots/01-[benefit-slug]/v2.jpg screenshots/01-[benefit-slug]/v3.jpg; do
-  OUTPUT="${INPUT%.jpg}-resized.jpg"
-  cp "$INPUT" "$OUTPUT"
-  W=$(sips -g pixelWidth "$OUTPUT" | tail -1 | awk '{print $2}')
-  H=$(sips -g pixelHeight "$OUTPUT" | tail -1 | awk '{print $2}')
-  CROP_W=$(python3 -c "print(round($H * $TARGET_W / $TARGET_H))")
-  OFFSET_X=$(python3 -c "print(round(($W - $CROP_W) / 2))")
-  sips --cropOffset 0 $OFFSET_X --cropToHeightWidth $H $CROP_W "$OUTPUT"
-  sips -z $TARGET_H $TARGET_W "$OUTPUT"
-  echo "--- $OUTPUT ---"
+SKILL_DIR="$HOME/.claude/skills/aso-appstore-screenshots" && \
+if [[ "$(uname)" == "Darwin" ]]; then
+  cp "$SELECTED" "$OUTPUT" && \
+  W=$(sips -g pixelWidth "$OUTPUT" | tail -1 | awk '{print $2}') && \
+  H=$(sips -g pixelHeight "$OUTPUT" | tail -1 | awk '{print $2}') && \
+  CROP_W=$(python3 -c "print(round($H * $TARGET_W / $TARGET_H))") && \
+  OFFSET_X=$(python3 -c "print(round(($W - $CROP_W) / 2))") && \
+  sips --cropOffset 0 $OFFSET_X --cropToHeightWidth $H $CROP_W "$OUTPUT" && \
+  sips -z $TARGET_H $TARGET_W "$OUTPUT" && \
   sips -g pixelWidth -g pixelHeight "$OUTPUT"
-done
+else
+  python3 "$SKILL_DIR/resize.py" \
+    --input "$SELECTED" \
+    --output "$OUTPUT" \
+    --width $TARGET_W --height $TARGET_H
+fi
 ```
 
-The script crops to the correct aspect ratio (top-center aligned — sides trimmed equally, top edge preserved so the headline stays put) and resizes to exact pixel dimensions. The resized image is saved as a separate file with `-resized.jpg` appended.
+The script crops to the correct aspect ratio (centre horizontally, top preserved so the headline stays put) then resizes to exact pixel dimensions. Output is saved as a new file with `-resized.jpg` appended.
 
 Target dimensions per display size — adjust `TARGET_W` and `TARGET_H`:
 - iPhone 6.5": `TARGET_W=1242 TARGET_H=2688`
 - iPhone 6.7" (default): `TARGET_W=1290 TARGET_H=2796`
 - iPhone 6.9": `TARGET_W=1320 TARGET_H=2868`
 
-**Step 4: Review all 3 versions with the user**
+**Step 4: Show the resized result**
 
-Present all 3 **resized** versions (the `-resized.jpg` files) to the user using the Read tool. Never show the raw Nano Banana output — always show the post-processed versions.
-
-Label them clearly as **Version 1**, **Version 2**, and **Version 3** and ask the user to pick their favourite or request changes.
+Use the Read tool to display the resized file (`-resized.jpg`) to the user. Confirm the dimensions look correct and the headline/device are not cropped unexpectedly. If the user is happy, move to Step 6. If they want changes, go to Step 5.
 
 **Step 5: Iterate if needed**
 
-If the user wants changes, use `edit_image` with **three images** as input:
-1. The **scaffold** (`scaffold.png`) — anchors the layout (text position, device placement, screenshot)
-2. The **style template** (the first approved screenshot from `screenshots/final/01-*.jpg`) — defines the device frame rendering and overall visual style that must be consistent across the entire set
-3. The **approved design** (the version the user liked best for this specific screenshot) — anchors the creative direction and breakout element approach
+If the user wants changes, output an iteration prompt for them to run in the Gemini web app. The iteration prompt uses **three reference images**: the scaffold, the style template, and the version the user liked best from the previous round.
 
-The prompt should reference all three:
+Display all three images using the Read tool so the user can upload them to Gemini, then output this prompt (fill in `[USER'S REQUESTED CHANGES]`):
+
 ```
 Here are three reference images, each with a distinct purpose:
 
@@ -446,11 +455,16 @@ Generate a new version that keeps the layout from the scaffold, the device frame
 [USER'S REQUESTED CHANGES]
 ```
 
-This prevents drift (scaffold keeps layout locked), maintains set-wide consistency (style template keeps device frame and visual treatment identical), and preserves the creative direction the user already approved.
+Tell the user:
+```
+Manual step — open gemini.google.com:
+1. Upload the scaffold, then the style template, then the approved version (3 images total)
+2. Paste the prompt above → generate → download → save as:
+   screenshots/0N-[benefit-slug]/v[N]-iteration.jpg
+3. Reply here with the filename when saved.
+```
 
-When iterating, generate **3 versions in parallel** again (3 parallel `edit_image` calls in a single message). Then **immediately run the Step 3 crop/resize loop on all 3 in a single Bash call** before showing the user.
-
-Repeat until the user is happy.
+Once the user provides the file, run the Step 3 crop/resize on the new file, then show the result. Repeat until the user is happy.
 
 **Step 6: Copy approved version to `final/`**
 
@@ -489,8 +503,8 @@ Save generated screenshots to a `screenshots/` directory in the project root, or
 screenshots/
   01-track-card-prices/       ← working versions for benefit 1
     scaffold.png              ← deterministic compose.py output (text + frame + screenshot)
-    v1.jpg                    ← Nano Banana enhanced version 1
-    v1-resized.jpg            ← cropped/resized to App Store dimensions
+    v1.jpg                    ← Gemini enhanced version 1
+    v1-resized.jpg            ← cropped/resized to App Store dimensions (if selected)
     v2.jpg
     v2-resized.jpg
     v3.jpg
