@@ -1,42 +1,53 @@
 #!/usr/bin/env python3
 """
-App Store Screenshot Composer
+App Store / Google Play Screenshot Composer
 Composites headline text, device frame template, and app screenshot
-into a pixel-perfect 1290×2796 App Store Connect image.
+into a pixel-perfect image at the correct store dimensions.
 
-The device frame is positioned dynamically based on text height,
-matching the proportions seen in professional App Store screenshots.
+Supported platforms:
+  --platform ios     → 1290×2796 (iPhone 6.7", App Store Connect default)
+  --platform android → 1080×1920 (Google Play phone)
 """
 
 import argparse
 import os
 from PIL import Image, ImageDraw, ImageFont, ImageChops
 
-# ── Canvas ──────────────────────────────────────────────────────────
-CANVAS_W = 1290
-CANVAS_H = 2796
-
-# ── Device template constants (must match generate_frame.py) ───────
-DEVICE_W = 1030
-BEZEL = 15
-SCREEN_W = DEVICE_W - 2 * BEZEL    # 1000
-SCREEN_CORNER_R = 62
-
-# ── Layout ──────────────────────────────────────────────────────────
-DEVICE_Y = 720                       # device top position (fixed)
-MIN_TEXT_DEVICE_GAP = 40             # minimum gap between text bottom and device top
-
-# ── Typography ──────────────────────────────────────────────────────
-VERB_SIZE_MAX = 256
-VERB_SIZE_MIN = 150
-DESC_SIZE = 124
-VERB_DESC_GAP = 20
-DESC_LINE_GAP = 24
-MAX_TEXT_W = int(CANVAS_W * 0.92)
-MAX_VERB_W = int(CANVAS_W * 0.92)
-
 FONT_PATH = "/Library/Fonts/SF-Pro-Display-Black.otf"
-FRAME_PATH = os.path.join(os.path.dirname(__file__), "assets", "device_frame.png")
+
+# ── Platform configs ─────────────────────────────────────────────────
+CONFIGS = {
+    "ios": {
+        "canvas_w": 1290,
+        "canvas_h": 2796,
+        "device_w": 1030,
+        "bezel": 15,
+        "screen_corner_r": 62,
+        "device_y": 720,
+        "text_top": 200,
+        "verb_size_max": 256,
+        "verb_size_min": 150,
+        "desc_size": 124,
+        "verb_desc_gap": 20,
+        "desc_line_gap": 24,
+        "frame_file": "device_frame.png",
+    },
+    "android": {
+        "canvas_w": 1080,
+        "canvas_h": 1920,
+        "device_w": 860,
+        "bezel": 12,
+        "screen_corner_r": 40,
+        "device_y": 490,
+        "text_top": 130,
+        "verb_size_max": 200,
+        "verb_size_min": 110,
+        "desc_size": 90,
+        "verb_desc_gap": 16,
+        "desc_line_gap": 18,
+        "frame_file": "android_device_frame.png",
+    },
+}
 
 
 def hex_to_rgb(h):
@@ -71,74 +82,78 @@ def fit_font(text, max_w, size_max, size_min):
     return ImageFont.truetype(FONT_PATH, size_min)
 
 
-def draw_centered(draw, y, text, font, max_w=None):
+def draw_centered(draw, y, text, font, canvas_w, line_gap, max_w=None):
     lines = word_wrap(draw, text, font, max_w) if max_w else [text]
     for line in lines:
         bbox = draw.textbbox((0, 0), line, font=font)
         h = bbox[3] - bbox[1]
-        # Use anchor="mt" (middle-top) for pixel-perfect horizontal centering
-        # Adjust y by bbox[1] offset so text top aligns with intended position
-        draw.text((CANVAS_W // 2, y - bbox[1]), line, fill="white", font=font, anchor="mt")
-        y += h + DESC_LINE_GAP
+        draw.text((canvas_w // 2, y - bbox[1]), line, fill="white", font=font, anchor="mt")
+        y += h + line_gap
     return y
 
 
-def compose(bg_hex, verb, desc, screenshot_path, output_path):
+def compose(bg_hex, verb, desc, screenshot_path, output_path, platform="ios"):
+    cfg = CONFIGS[platform]
+
+    canvas_w = cfg["canvas_w"]
+    canvas_h = cfg["canvas_h"]
+    device_w = cfg["device_w"]
+    bezel = cfg["bezel"]
+    screen_w = device_w - 2 * bezel
+    screen_corner_r = cfg["screen_corner_r"]
+    device_y = cfg["device_y"]
+    text_top = cfg["text_top"]
+    verb_size_max = cfg["verb_size_max"]
+    verb_size_min = cfg["verb_size_min"]
+    desc_size = cfg["desc_size"]
+    verb_desc_gap = cfg["verb_desc_gap"]
+    desc_line_gap = cfg["desc_line_gap"]
+    max_text_w = int(canvas_w * 0.92)
+    max_verb_w = int(canvas_w * 0.92)
+
+    frame_path = os.path.join(os.path.dirname(__file__), "assets", cfg["frame_file"])
+
     bg = hex_to_rgb(bg_hex)
 
     # ── 1. Canvas ───────────────────────────────────────────────────
-    canvas = Image.new("RGBA", (CANVAS_W, CANVAS_H), (*bg, 255))
+    canvas = Image.new("RGBA", (canvas_w, canvas_h), (*bg, 255))
     draw = ImageDraw.Draw(canvas)
 
-    # ── 2. Measure text, then center between top of canvas & device ─
-    verb_font = fit_font(verb.upper(), MAX_VERB_W, VERB_SIZE_MAX, VERB_SIZE_MIN)
-    desc_font = ImageFont.truetype(FONT_PATH, DESC_SIZE)
+    # ── 2. Fonts ────────────────────────────────────────────────────
+    verb_font = fit_font(verb.upper(), max_verb_w, verb_size_max, verb_size_min)
+    desc_font = ImageFont.truetype(FONT_PATH, desc_size)
 
-    # Measure total text block height (dry run at y=0)
-    dummy = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
-    m_y = 0
-    m_y = draw_centered(dummy, m_y, verb.upper(), verb_font)
-    m_y += VERB_DESC_GAP
-    text_height = draw_centered(dummy, m_y, desc.upper(), desc_font, max_w=MAX_TEXT_W)
-
-    # Device at fixed Y; text starts at fixed position
-    device_y = DEVICE_Y
-    text_top = 200
-
-    # Draw text at centered position
+    # ── 3. Draw headline text ────────────────────────────────────────
     y = text_top
-    y = draw_centered(draw, y, verb.upper(), verb_font)
-    y += VERB_DESC_GAP
-    draw_centered(draw, y, desc.upper(), desc_font, max_w=MAX_TEXT_W)
-    device_x = (CANVAS_W - DEVICE_W) // 2
-    screen_x = device_x + BEZEL
-    screen_y = device_y + BEZEL
+    y = draw_centered(draw, y, verb.upper(), verb_font, canvas_w, desc_line_gap)
+    y += verb_desc_gap
+    draw_centered(draw, y, desc.upper(), desc_font, canvas_w, desc_line_gap, max_w=max_text_w)
 
     # ── 4. Screenshot into screen area ──────────────────────────────
+    device_x = (canvas_w - device_w) // 2
+    screen_x = device_x + bezel
+    screen_y = device_y + bezel
+
     shot = Image.open(screenshot_path).convert("RGBA")
 
-    # Scale to fill screen width
-    scale = SCREEN_W / shot.width
-    sc_w = SCREEN_W
+    scale = screen_w / shot.width
+    sc_w = screen_w
     sc_h = int(shot.height * scale)
     shot = shot.resize((sc_w, sc_h), Image.LANCZOS)
 
-    # Screen extends to bottom of canvas + overflow
-    screen_h = CANVAS_H - screen_y + 500
+    screen_h = canvas_h - screen_y + 500
 
-    # Screen mask (rounded rect)
     scr_mask = Image.new("L", canvas.size, 0)
     ImageDraw.Draw(scr_mask).rounded_rectangle(
-        [screen_x, screen_y, screen_x + SCREEN_W, screen_y + screen_h],
-        radius=SCREEN_CORNER_R,
+        [screen_x, screen_y, screen_x + screen_w, screen_y + screen_h],
+        radius=screen_corner_r,
         fill=255,
     )
 
-    # Black screen bg + screenshot on top
     scr_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     ImageDraw.Draw(scr_layer).rounded_rectangle(
-        [screen_x, screen_y, screen_x + SCREEN_W, screen_y + screen_h],
-        radius=SCREEN_CORNER_R,
+        [screen_x, screen_y, screen_x + screen_w, screen_y + screen_h],
+        radius=screen_corner_r,
         fill=(0, 0, 0, 255),
     )
     scr_layer.paste(shot, (screen_x, screen_y))
@@ -146,29 +161,34 @@ def compose(bg_hex, verb, desc, screenshot_path, output_path):
 
     canvas = Image.alpha_composite(canvas, scr_layer)
 
-    # ── 6. Device frame template ───────────────────────────────────
-    frame_template = Image.open(FRAME_PATH).convert("RGBA")
+    # ── 5. Device frame template ─────────────────────────────────────
+    frame_template = Image.open(frame_path).convert("RGBA")
 
-    # Place frame template onto canvas-sized layer at calculated position
     frame_layer = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
     frame_layer.paste(frame_template, (device_x, device_y))
     canvas = Image.alpha_composite(canvas, frame_layer)
 
-    # ── 7. Save ────────────────────────────────────────────────────
+    # ── 6. Save ──────────────────────────────────────────────────────
     canvas.convert("RGB").save(output_path, "PNG")
-    print(f"✓ {output_path} ({CANVAS_W}×{CANVAS_H})")
+    print(f"Done: {output_path} ({canvas_w}x{canvas_h}, platform={platform})")
 
 
 def main():
-    p = argparse.ArgumentParser(description="Compose App Store screenshot")
+    p = argparse.ArgumentParser(description="Compose App Store / Google Play screenshot")
     p.add_argument("--bg", required=True, help="Background hex colour (#E31837)")
     p.add_argument("--verb", required=True, help="Action verb (TRACK)")
     p.add_argument("--desc", required=True, help="Benefit descriptor (TRADING CARD PRICES)")
-    p.add_argument("--screenshot", required=True, help="Simulator screenshot path")
+    p.add_argument("--screenshot", required=True, help="Simulator/emulator screenshot path")
     p.add_argument("--output", required=True, help="Output file path")
+    p.add_argument(
+        "--platform",
+        choices=["ios", "android"],
+        default="ios",
+        help="Target platform (default: ios)",
+    )
     args = p.parse_args()
 
-    compose(args.bg, args.verb, args.desc, args.screenshot, args.output)
+    compose(args.bg, args.verb, args.desc, args.screenshot, args.output, args.platform)
 
 
 if __name__ == "__main__":
